@@ -123,7 +123,7 @@ npm run typecheck
 python3 -m http.server
 ```
 
-Releases are built by GitHub Actions when you push a tag that matches `package.json`'s version, such as `v0.1.0`.
+To release, bump `version` in `package.json` (and `VERSION` in `src/frigate-timeline-card.ts`) and push to `main`. GitHub Actions then builds the card and publishes a `v<version>` release, which HACS offers as an update.
 
 ## License
 
