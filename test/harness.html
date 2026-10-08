@@ -1,0 +1,130 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>frigate-timeline-card harness</title>
+<style>
+  body { margin: 0; padding: 16px; font-family: Roboto, system-ui, sans-serif; }
+  body.dark {
+    background: #111111; color: #e1e1e1;
+    --primary-text-color: #e1e1e1; --secondary-text-color: #9b9b9b; --primary-color: #03a9f4;
+    --card-background-color: #1c1c1c; --ha-card-background: #1c1c1c; --divider-color: rgba(225,225,225,.12);
+    --secondary-background-color: #282828; --error-color: #db4437; --text-primary-color: #fff;
+  }
+  body.light {
+    background: #fafafa; color: #212121;
+    --primary-text-color: #212121; --secondary-text-color: #727272; --primary-color: #03a9f4;
+    --card-background-color: #fff; --ha-card-background: #fff; --divider-color: rgba(0,0,0,.12);
+    --secondary-background-color: #e5e5e5; --error-color: #db4437; --text-primary-color: #fff;
+  }
+</style>
+<script>
+  // Minimal stand-ins for HA's built-in elements.
+  customElements.define('ha-card', class extends HTMLElement {
+    connectedCallback() {
+      Object.assign(this.style, { display: 'block', background: 'var(--ha-card-background)', borderRadius: '12px',
+        boxShadow: '0 1px 3px rgba(0,0,0,.2)', color: 'var(--primary-text-color)' });
+    }
+  });
+  customElements.define('ha-icon', class extends HTMLElement {
+    connectedCallback() {
+      Object.assign(this.style, { display: 'inline-block', width: '18px', height: '18px', borderRadius: '3px',
+        background: 'currentColor', opacity: '.5' });
+    }
+  });
+</script>
+</head>
+<body class="dark">
+<div id="host"></div>
+<script type="module">
+  await import('../dist/frigate-timeline-card.js');
+  const now = Date.now() / 1000;
+  const ago = (min) => now - min * 60;
+  const mk = (id, camera, startMin, durSec, severity, objects, subLabels = [], reviewed = false) => ({
+    id, camera, start_time: ago(startMin), end_time: durSec === null ? null : ago(startMin) + durSec, severity,
+    thumb_path: `/media/frigate/clips/review/thumb-${camera}-${id}.webp`,
+    data: { objects, sub_labels: subLabels, zones: [], detections: [`ev-${id}`] }, has_been_reviewed: reviewed,
+  });
+  const reviews = [
+    mk('r1', 'porch', 350, 9, 'alert', ['person'], ['Alex'], true),
+    mk('r2', 'deck', 330, 9, 'alert', ['person'], ['Alex'], true),
+    mk('r3', 'porch_tele', 329, 40, 'detection', ['person'], ['Alex']),
+    mk('r4', 'side_gate', 280, 70, 'detection', ['cat']),
+    mk('r5', 'garden', 230, 95, 'detection', ['dog']),
+    mk('r6', 'garden', 140, 44, 'detection', ['person'], ['Sam']),
+    mk('r7', 'deck', 60, 14, 'alert', ['person-verified'], ['Alex']),
+    mk('r8', 'drive_ptz', 21, 30, 'detection', ['car']),
+    mk('r9', 'drive_wide', 18, 242, 'alert', ['person']),
+    mk('r10', 'drive_ptz', 17, 180, 'alert', ['person'], ['Sam']),
+    mk('r11', 'drive_wide', 4, null, 'alert', ['person']),
+  ];
+  const states = {};
+  const ent = (id, name, state, minAgo) => (states[id] = { entity_id: id, state, attributes: { friendly_name: name },
+    last_changed: new Date(ago(minAgo) * 1000).toISOString(), last_updated: new Date(ago(minAgo) * 1000).toISOString() });
+  ent('binary_sensor.front_door', 'Front Door', 'off', 11);
+  ent('lock.front_door', 'Front Door Lock', 'unlocked', 12);
+  ent('binary_sensor.back_door', 'Back Door', 'off', 329);
+  ent('cover.garage_door', 'Garage Door', 'closed', 16);
+  ent('binary_sensor.garage_door_tamper', 'Garage door tamper', 'off', 400);
+  const history = {
+    'binary_sensor.front_door': [{ s: 'off', lu: ago(360) }, { s: 'on', lu: ago(11.8) }, { s: 'off', lu: ago(11) }],
+    'lock.front_door': [{ s: 'locked', lu: ago(360) }, { s: 'unlocked', lu: ago(351) }, { s: 'locked', lu: ago(340) }, { s: 'unlocked', lu: ago(12) }],
+    'binary_sensor.back_door': [{ s: 'off', lu: ago(360) }, { s: 'on', lu: ago(331) }, { s: 'off', lu: ago(329) }],
+    'cover.garage_door': [{ s: 'closed', lu: ago(360) }, { s: 'opening', lu: ago(21.5) }, { s: 'open', lu: ago(21.2) }, { s: 'closing', lu: ago(16.4) }, { s: 'closed', lu: ago(16) }],
+    'binary_sensor.garage_door_tamper': [{ s: 'off', lu: ago(400) }, { s: 'on', lu: ago(200) }, { s: 'off', lu: ago(199) }],
+  };
+  const calls = [];
+  window.__calls = calls;
+  const hass = {
+    states,
+    config: { time_zone: 'America/Denver' },
+    locale: { language: 'en', time_zone: 'local' },
+    auth: { data: { access_token: 'test' } },
+    hassUrl: (p = '') => location.origin + p,
+    fetchWithAuth: async () => new Response(new Blob([`<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#3a4a5a"/></svg>`], { type: 'image/svg+xml' })),
+    connection: { subscribeMessage: async (cb, msg) => { calls.push(msg); window.__push = cb; return async () => {}; } },
+    callWS: async (msg) => {
+      calls.push(msg);
+      switch (msg.type) {
+        case 'frigate/reviews/get': return JSON.stringify(reviews.filter((r) => msg.cameras.includes(r.camera)));
+        case 'frigate/reviews/viewed': return { success: true };
+        case 'frigate/events/get': return JSON.stringify([{ id: 'ev-r7', camera: 'deck', label: 'person', sub_label: 'Alex', start_time: ago(60), end_time: ago(60) + 14, data: { sub_label_score: 0.93 } }, { id: 'ev-r10', camera: 'drive_ptz', label: 'person', sub_label: 'Sam', start_time: ago(17), end_time: null, data: { sub_label_score: 0.91 } }]);
+        case 'frigate/recordings/get': {
+          if (msg.camera.endsWith('_tele')) return JSON.stringify([]); // detect-only, like the real setup
+          const out = [];
+          for (let t = msg.after; t < msg.before; t += 10) out.push({ start_time: t, end_time: t + 10, motion: Math.random() < 0.15 ? Math.round(Math.random() * 200) : 0, objects: 0 });
+          return JSON.stringify(out);
+        }
+        case 'history/history_during_period': return history;
+        case 'auth/sign_path':
+          // Route VOD manifests to the local test stream so playback and sync can be exercised.
+          return { path: (msg.path.includes('/vod/') ? '/test/media/index.m3u8' : msg.path) + '?authSig=x' };
+        default: throw new Error('unhandled ' + msg.type);
+      }
+    },
+  };
+  const card = document.createElement('frigate-timeline-card');
+  card.setConfig({
+    type: 'custom:frigate-timeline-card',
+    default_range: '6h',
+    cameras: [
+      { name: 'Porch', lenses: [{ camera: 'porch', label: 'Wide', entity: 'camera.porch' }, { camera: 'porch_tele', label: 'Tele' }] },
+      { name: 'Deck', lenses: [{ camera: 'deck', label: 'Wide' }, { camera: 'deck_tele', label: 'Tele' }] },
+      { name: 'Garden', lenses: [{ camera: 'garden', label: 'Wide' }, { camera: 'garden_tele', label: 'Tele' }] },
+      { name: 'Drive', lenses: [{ camera: 'drive_wide', label: 'Wide' }, { camera: 'drive_ptz', label: 'PTZ' }] },
+      { name: 'Side gate', camera: 'side_gate' },
+    ],
+    security: [
+      { name: 'Front door', entities: ['binary_sensor.front_door', 'lock.front_door'], camera: 'drive_wide' },
+      { name: 'Back door', entities: ['binary_sensor.back_door'], camera: 'porch' },
+      { name: 'Garage', entities: ['cover.garage_door'], tamper: ['binary_sensor.garage_door_tamper'], camera: 'drive_ptz' },
+    ],
+    faces: [{ name: 'Alex' }, { name: 'Sam' }],
+  });
+  card.hass = hass;
+  document.getElementById('host').appendChild(card);
+  window.__card = card;
+</script>
+</body>
+</html>
