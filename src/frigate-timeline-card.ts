@@ -21,7 +21,7 @@ import './components/auth-img';
 import './components/player';
 import type { FtcPlayer } from './components/player';
 
-const VERSION = '0.2.2';
+const VERSION = '0.2.3';
 const RELATED_WINDOW = 300; // seconds either side of a review for "security events nearby"
 const MOMENT_WINDOW = 90; // seconds either side for "same moment, other cameras"
 const MOTION_MAX_SPAN = 6 * 3600;
@@ -478,11 +478,7 @@ export class FrigateTimelineCard extends LitElement {
     });
   }
 
-  private unreviewedSorted(): Review[] {
-    return this.filtered()
-      .filter((r) => !r.reviewed || r.id === this._selId)
-      .sort((a, b) => a.start - b.start);
-  }
+
 
   private autoSelect(): void {
     if (this._selId && this._reviews.has(this._selId)) return;
@@ -621,11 +617,21 @@ export class FrigateTimelineCard extends LitElement {
       await this.setReviewed([cur.id], false);
       return;
     }
-    const next = this.unreviewedSorted()
-      .filter((r) => r.id !== cur.id && !r.reviewed)
-      .sort((a, b) => b.start - a.start)[0];
+    // Same direction as "Next event": the next unreviewed event later in time,
+    // else (end of the range) the nearest unreviewed one before it.
+    const list = this.navList();
+    const idx = list.findIndex((r) => r.id === cur.id);
+    const later = list.slice(idx + 1).find((r) => !r.reviewed);
+    const earlier = list
+      .slice(0, Math.max(0, idx))
+      .reverse()
+      .find((r) => !r.reviewed);
+    const next = later ?? earlier;
     void this.setReviewed([cur.id], true);
-    if (next) this.select(next);
+    if (next) {
+      this.select(next);
+      this.revealInWindow(next);
+    }
   }
 
   /** Unreviewed events in the current range and filters. */
@@ -1338,7 +1344,7 @@ export class FrigateTimelineCard extends LitElement {
         <button
           class=${r.reviewed ? 'icon-btn' : 'primary-btn'}
           @click=${() => void this.markAndNext()}
-          title=${r.reviewed ? 'Set this event back to unreviewed in Frigate' : 'Mark reviewed in Frigate and open the newest remaining unreviewed event (r)'}
+          title=${r.reviewed ? 'Set this event back to unreviewed in Frigate' : 'Mark reviewed in Frigate and go to the next unreviewed event after this one (r)'}
         >
           ${r.reviewed ? 'Mark unreviewed' : 'Mark reviewed & next'}
         </button>

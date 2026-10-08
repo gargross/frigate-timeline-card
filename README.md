@@ -96,7 +96,7 @@ Click the card to give it focus, then:
 |---|---|
 | `→` / `j` | Next event (later) |
 | `←` / `k` | Previous event (earlier) |
-| `r` | Mark reviewed and go to the newest remaining unreviewed event, or un-review if already reviewed |
+| `r` | Mark reviewed and go to the next unreviewed event after this one (or the nearest earlier one at the end of the range); un-review if already reviewed |
 | `s` | Toggle **Play all in sync** |
 
 On the timeline, drag to pan and use Ctrl/⌘ + scroll to zoom.
