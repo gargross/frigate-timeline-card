@@ -99,7 +99,7 @@ Click the card to give it focus, then:
 | `r` | Mark reviewed and go to the next unreviewed event after this one (or the nearest earlier one at the end of the range); un-review if already reviewed |
 | `s` | Toggle **Play all in sync** |
 
-On the timeline, drag to pan and use Ctrl/⌘ + scroll to zoom.
+On the timeline, drag to pan and use Ctrl/⌘ + scroll to zoom. The date above the camera names opens a date picker (shows that whole day), and the ‹ › buttons beside it step a day back or forward. When filters are hiding events, a bar shows what is applied with a **Clear filters** button.
 
 ## Notes
 

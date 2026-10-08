@@ -21,7 +21,7 @@ import './components/auth-img';
 import './components/player';
 import type { FtcPlayer } from './components/player';
 
-const VERSION = '0.2.3';
+const VERSION = '0.2.4';
 const RELATED_WINDOW = 300; // seconds either side of a review for "security events nearby"
 const MOMENT_WINDOW = 90; // seconds either side for "same moment, other cameras"
 const MOTION_MAX_SPAN = 6 * 3600;
@@ -655,10 +655,57 @@ export class FrigateTimelineCard extends LitElement {
     void this.setReviewed(u.ids, u.viewed);
   }
 
+  /** Change the span but keep the end of the window you're looking at. */
   private setRange(range: RangeKey): void {
+    if (!this._follow) this._winEnd = this.window.end;
     this._span = RANGE_SECONDS[range];
-    this._follow = true;
-    this._winEnd = nowSec();
+  }
+
+  /** Move the window by whole days (dir -1 = back, 1 = forward). Reaching now resumes live follow. */
+  private shiftDay(dir: 1 | -1): void {
+    const end = this.window.end + dir * 86400;
+    if (end >= nowSec() - 5) {
+      this.goLive();
+    } else {
+      this._follow = false;
+      this._winEnd = end;
+    }
+  }
+
+  /** Show one whole local day (midnight to midnight, or to now for today). */
+  private showDate(value: string): void {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!m) return;
+    const dayEnd = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1).getTime() / 1000;
+    this._span = RANGE_SECONDS['24h'];
+    if (dayEnd >= nowSec()) this.goLive();
+    else {
+      this._follow = false;
+      this._winEnd = dayEnd;
+    }
+  }
+
+  private static isoDate(sec: number): string {
+    const d = new Date(sec * 1000);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  private openDatePicker(): void {
+    const input = this.renderRoot.querySelector<HTMLInputElement>('input.date-input');
+    if (!input) return;
+    try {
+      input.showPicker();
+    } catch {
+      input.focus();
+      input.click();
+    }
+  }
+
+  private clearFilters(): void {
+    this._sev = 'all';
+    this._unrevOnly = false;
+    this._face = null;
   }
 
   private goLive(): void {
@@ -798,7 +845,7 @@ export class FrigateTimelineCard extends LitElement {
       <div class="seg" role="group" aria-label="Time range">
         ${ranges.map(
           (r) => html`<button
-            aria-pressed=${String(this._follow && this._span === RANGE_SECONDS[r])}
+            aria-pressed=${String(this._span === RANGE_SECONDS[r])}
             @click=${() => this.setRange(r)}
           >
             ${r}
@@ -854,6 +901,53 @@ export class FrigateTimelineCard extends LitElement {
               ? `Mark ${markable} ${filtered ? 'shown ' : ''}reviewed`
               : 'All reviewed'}
           </button>`}
+    </div>`;
+  }
+
+  private renderDateNav(): TemplateResult {
+    const { end } = this.window;
+    const labelT = end - 1; // a window ending at midnight belongs to the previous day
+    const today = FrigateTimelineCard.isoDate(nowSec());
+    return html`<div class="date-nav">
+      <button class="date-step" aria-label="Previous day" title="Back one day" @click=${() => this.shiftDay(-1)}>
+        <ha-icon icon="mdi:chevron-left"></ha-icon>
+      </button>
+      <button class="date-btn" title="Pick a date" @click=${() => this.openDatePicker()}>${this.fmt?.d(labelT)}</button>
+      <input
+        class="date-input"
+        type="date"
+        tabindex="-1"
+        aria-hidden="true"
+        max=${today}
+        .value=${FrigateTimelineCard.isoDate(labelT)}
+        @change=${(e: Event) => this.showDate((e.target as HTMLInputElement).value)}
+      />
+      <button
+        class="date-step"
+        aria-label="Next day"
+        title="Forward one day"
+        ?disabled=${this._follow}
+        @click=${() => this.shiftDay(1)}
+      >
+        <ha-icon icon="mdi:chevron-right"></ha-icon>
+      </button>
+    </div>`;
+  }
+
+  /** Visible when filters hide events: what is applied, how much is hidden, one click to clear. */
+  private renderFilterBanner(): TemplateResult | typeof nothing {
+    const active: string[] = [];
+    if (this._sev !== 'all') active.push(this._sev === 'alert' ? 'Alerts only' : 'Detections only');
+    if (this._unrevOnly) active.push('Unreviewed only');
+    if (this._face) active.push(this._face === 'Unknown' ? 'Unknown people' : this._face);
+    if (!active.length) return nothing;
+    const { start, end } = this.window;
+    const all = Array.from(this._reviews.values()).filter((r) => this.lensIndex.has(r.camera) && this.inWindow(r, start, end)).length;
+    const shown = this.filtered().filter((r) => this.inWindow(r, start, end)).length;
+    return html`<div class="filter-banner" role="status">
+      <ha-icon icon="mdi:filter-variant"></ha-icon>
+      <span>Filtered: <b>${active.join(' · ')}</b> — showing ${shown} of ${all} events</span>
+      <button class="icon-btn" @click=${() => this.clearFilters()}>Clear filters</button>
     </div>`;
   }
 
@@ -923,8 +1017,8 @@ export class FrigateTimelineCard extends LitElement {
 
     return html`<div class="timeline" @wheel=${(e: WheelEvent) => this.onWheel(e)}>
       <div class="timeline-inner">
-        <div class="row" style="height:18px">
-          <div class="legend" style="font-size:11px">${this.fmt?.d(start)}</div>
+        <div class="row" style="height:28px;align-items:end">
+          ${this.renderDateNav()}
           <div class="axis">
             ${tickList.map((t) => html`<span style="left:${this.pct(t)}%">${this.fmt?.t(t)}</span>`)}
           </div>
@@ -1558,7 +1652,7 @@ export class FrigateTimelineCard extends LitElement {
         : nothing}
       ${this._narrow
         ? this.renderNarrow(visible, marks, now)
-        : html`${this.renderToolbar(false)}
+        : html`${this.renderToolbar(false)} ${this.renderFilterBanner()}
             ${this.renderTimeline(ticks(start, end), visible.filter((r) => this.inWindow(r, start, end)), marks, now)}
             <div class="lower">
               ${this.renderPlayer()}

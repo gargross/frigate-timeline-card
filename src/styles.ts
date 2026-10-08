@@ -725,6 +725,73 @@ export const cardStyles = css`
     font-weight: 600;
   }
 
+  .date-nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    position: relative;
+    min-width: 0;
+  }
+  .date-step {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: var(--ftc-track);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+  }
+  .date-step ha-icon {
+    --mdc-icon-size: 16px;
+  }
+  .date-btn {
+    border: 0;
+    background: transparent;
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+  }
+  .date-btn:hover {
+    background: var(--ftc-track);
+  }
+  /* Native date input kept in the DOM for showPicker(), anchored under the label. */
+  .date-input {
+    position: absolute;
+    left: 28px;
+    top: 100%;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+    border: 0;
+    padding: 0;
+  }
+  .filter-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 6px 4px 12px;
+    border-radius: var(--ftc-radius-inner);
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+    font-size: 13px;
+  }
+  .filter-banner ha-icon {
+    --mdc-icon-size: 18px;
+    color: var(--primary-color);
+  }
+  .filter-banner span {
+    flex: 1;
+  }
+
   /* ---------- narrow / phone feed ---------- */
   .strip .row {
     height: 14px;
