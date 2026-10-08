@@ -4,15 +4,30 @@ import type { HomeAssistant } from '../types';
 const cache = new Map<string, Promise<string | null>>();
 
 export async function authFetch(hass: HomeAssistant, path: string): Promise<Response> {
+  if (!path.startsWith('/api/frigate/') || /(^|\/)\.\.?(\/|$)/.test(path)) {
+    throw new Error('refusing authenticated fetch outside /api/frigate/');
+  }
   if (hass.fetchWithAuth) return hass.fetchWithAuth(path);
   return fetch(hass.hassUrl(path), {
     headers: { Authorization: `Bearer ${hass.auth.data.access_token}` },
   });
 }
 
+const CACHE_MAX = 200;
+
 function load(hass: HomeAssistant, path: string): Promise<string | null> {
   let p = cache.get(path);
+  if (p) {
+    // LRU: move to most-recent.
+    cache.delete(path);
+    cache.set(path, p);
+  }
   if (!p) {
+    while (cache.size >= CACHE_MAX) {
+      const [oldest, entry] = cache.entries().next().value as [string, Promise<string | null>];
+      cache.delete(oldest);
+      void entry.then((url) => url && URL.revokeObjectURL(url));
+    }
     p = authFetch(hass, path)
       .then(async (res) => (res.ok ? URL.createObjectURL(await res.blob()) : null))
       .catch(() => null);

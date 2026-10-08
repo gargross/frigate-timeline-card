@@ -1,6 +1,6 @@
 import { LitElement, css, html } from 'lit';
 import type HlsType from 'hls.js/light';
-import type { FrigateApi } from '../data/frigate';
+import { isFrigateProxyPath, type FrigateApi } from '../data/frigate';
 import type { HomeAssistant } from '../types';
 
 let hlsPromise: Promise<typeof HlsType | null> | null = null;
@@ -144,24 +144,31 @@ export class FtcPlayer extends LitElement {
       // *segments*; they only accept the manifest's signature (authSig) repeated on
       // each segment URL. Sign the manifest once and append its authSig to every
       // request hls.js makes. The Bearer header is kept for newer integrations.
+      // Signature lifetime: long enough to play the window at 1×, plus margin; not hours.
+      const lifetime = Math.min(4 * 3600, Math.max(900, Math.ceil(to - from) + 900));
       let url: string;
       let sig: string | null = null;
       try {
-        url = await this.api.signPath(this.api.vodPath(this.camera, from, to), 4 * 3600);
+        url = await this.api.signPath(this.api.vodPath(this.camera, from, to), lifetime);
         sig = new URL(url).searchParams.get('authSig');
       } catch {
         url = this.hass.hassUrl(this.api.vodPath(this.camera, from, to));
       }
       if (this.loadedKey !== key) return;
-      const withSig = (u: string): string => {
-        if (!sig || u.includes('authSig=')) return u;
-        const parsed = new URL(u, url);
-        parsed.searchParams.set('authSig', sig);
-        return parsed.toString();
-      };
+      // Credentials (bearer token, authSig) are attached ONLY to requests for this
+      // window's VOD directory on the Home Assistant origin. A manifest is data from
+      // Frigate; any segment URL pointing elsewhere is refused rather than fetched.
+      const haOrigin = new URL(this.hass.hassUrl('/')).origin;
+      const vodBase = this.api.vodBase(this.camera, from, to) + '/';
+      const instanceId = this.api.instanceId;
       const hls = new Hls({
         xhrSetup: (xhr: XMLHttpRequest, reqUrl: string) => {
-          xhr.open('GET', withSig(reqUrl), true);
+          const u = new URL(reqUrl, url);
+          if (u.origin !== haOrigin || !u.pathname.startsWith(vodBase) || !isFrigateProxyPath(instanceId, u.pathname)) {
+            throw new Error(`frigate-timeline-card: blocked off-origin media request ${u.origin}${u.pathname}`);
+          }
+          if (sig && !u.searchParams.has('authSig')) u.searchParams.set('authSig', sig);
+          xhr.open('GET', u.toString(), true);
           xhr.setRequestHeader('Authorization', `Bearer ${this.hass.auth.data.access_token}`);
         },
         startPosition: seekTo,

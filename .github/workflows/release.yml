@@ -2,69 +2,94 @@ name: Release
 
 # Publishes a GitHub release (which HACS installs from) whenever main carries a
 # package.json version that has no release yet. To release: bump "version" in
-# package.json and push to main.
+# package.json (and VERSION in src/frigate-timeline-card.ts) and push to main.
+#
+# Hardening: actions pinned to commit SHAs; the job that runs npm (third-party
+# code) has a read-only token; only the publish job, which runs no npm code,
+# gets contents: write.
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
+  check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      exists: ${{ steps.v.outputs.exists }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Read version
-        id: v
-        run: echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
-      - name: Skip if already released
-        id: check
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - id: v
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          if gh release view "${{ steps.v.outputs.tag }}" >/dev/null 2>&1; then
-            echo "Release ${{ steps.v.outputs.tag }} already exists; nothing to do."
+          version="$(node -p "require('./package.json').version")"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "package.json version '$version' is not semver"; exit 1
+          fi
+          tag="v$version"
+          src="$(grep -oE "VERSION = '[^']+'" src/frigate-timeline-card.ts | cut -d"'" -f2)"
+          if [ "v$src" != "$tag" ]; then echo "src VERSION ($src) != package.json ($version)"; exit 1; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-node@v4
-        if: steps.check.outputs.exists == 'false'
+  build:
+    needs: check
+    if: needs.check.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/*.js
+          if-no-files-found: error
+          retention-days: 1
 
-      - if: steps.check.outputs.exists == 'false'
-        run: npm ci
-
-      - if: steps.check.outputs.exists == 'false'
-        run: npm run typecheck
-
-      - if: steps.check.outputs.exists == 'false'
-        run: npm run build
-
-      - name: Check card banner version matches package.json
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          grep -q "${{ steps.v.outputs.tag }}" <(echo "v$(grep -oE "VERSION = '[^']+'" src/frigate-timeline-card.ts | cut -d"'" -f2)") \
-            || { echo "src VERSION does not match package.json"; exit 1; }
-
-      - name: Publish release with card bundle
-        if: steps.check.outputs.exists == 'false'
-        env:
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist
+      - env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.check.outputs.tag }}
+          SHA: ${{ github.sha }}
         run: |
-          gh release create "${{ steps.v.outputs.tag }}" dist/*.js \
-            --target "$GITHUB_SHA" \
-            --title "${{ steps.v.outputs.tag }}" \
-            --generate-notes
+          # Only the JS files: HACS downloads every release asset into the dashboard folder.
+          gh release create "$TAG" dist/*.js \
+            --repo "$REPO" --target "$SHA" --title "$TAG" --generate-notes

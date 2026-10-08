@@ -51,6 +51,14 @@ export function normalizeReview(raw: RawReview, reviewedFallback = false): Revie
   };
 }
 
+const seg = (v: string): string => encodeURIComponent(v);
+const ts = (v: number): string => String(Math.max(0, Math.floor(v)));
+
+/** Paths the card may attach credentials to: this instance's Frigate proxy only. */
+export function isFrigateProxyPath(instanceId: string, path: string): boolean {
+  return path.startsWith(`/api/frigate/${seg(instanceId)}/`) && !/(^|\/)\.\.?(\/|$)/.test(path);
+}
+
 export interface FrigateEvent {
   id: string;
   camera: string;
@@ -152,22 +160,35 @@ export class FrigateApi {
 
   // ---------- Media paths (all served by the integration's authenticated proxies) ----------
 
+  /** Base directory of a VOD window; segments live under it. */
+  vodBase(camera: string, start: number, end: number): string {
+    return `/api/frigate/${seg(this.instanceId)}/vod/${seg(camera)}/start/${ts(start)}/end/${ts(Math.ceil(end))}`;
+  }
+
   vodPath(camera: string, start: number, end: number): string {
-    return `/api/frigate/${this.instanceId}/vod/${camera}/start/${Math.floor(start)}/end/${Math.ceil(end)}/index.m3u8`;
+    return `${this.vodBase(camera, start, end)}/index.m3u8`;
   }
 
   clipPath(camera: string, start: number, end: number): string {
-    return `/api/frigate/${this.instanceId}/recording/${camera}/start/${Math.floor(start)}/end/${Math.ceil(end)}`;
+    return `/api/frigate/${seg(this.instanceId)}/recording/${seg(camera)}/start/${ts(start)}/end/${ts(Math.ceil(end))}`;
   }
 
+  /**
+   * Review thumbnail via the integration's clips proxy. thumb_path comes from Frigate
+   * (and from MQTT for live items), so it is treated as untrusted: only a plain
+   * relative file path under clips/ is accepted, each segment URL-encoded.
+   */
   reviewThumbPath(review: Review): string | null {
     const marker = '/clips/';
     const idx = review.thumbPath.indexOf(marker);
     if (idx < 0) return null;
-    return `/api/frigate/${this.instanceId}/clips/${review.thumbPath.slice(idx + marker.length)}`;
+    const parts = review.thumbPath.slice(idx + marker.length).split('/');
+    if (!parts.length || parts.some((p) => !p || p === '.' || p === '..' || !/^[\w.@-]+$/.test(p))) return null;
+    return `/api/frigate/${seg(this.instanceId)}/clips/${parts.map(seg).join('/')}`;
   }
 
   async signPath(path: string, expires = 3600): Promise<string> {
+    if (!isFrigateProxyPath(this.instanceId, path)) throw new Error('refusing to sign a non-Frigate path');
     const res = await this.hass.callWS<{ path: string }>({
       type: 'auth/sign_path',
       path,

@@ -21,7 +21,7 @@ import './components/auth-img';
 import './components/player';
 import type { FtcPlayer } from './components/player';
 
-const VERSION = '0.2.1';
+const VERSION = '0.2.2';
 const RELATED_WINDOW = 300; // seconds either side of a review for "security events nearby"
 const MOMENT_WINDOW = 90; // seconds either side for "same moment, other cameras"
 const MOTION_MAX_SPAN = 6 * 3600;

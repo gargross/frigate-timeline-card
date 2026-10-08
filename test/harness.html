@@ -98,8 +98,8 @@
         }
         case 'history/history_during_period': return history;
         case 'auth/sign_path':
-          // Route VOD manifests to the local test stream so playback and sync can be exercised.
-          return { path: (msg.path.includes('/vod/') ? '/test/media/index.m3u8' : msg.path) + '?authSig=x' };
+          // test/server.py serves the VOD proxy paths from test/media/.
+          return { path: msg.path + '?authSig=x' };
         default: throw new Error('unhandled ' + msg.type);
       }
     },

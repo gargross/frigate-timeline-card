@@ -2,6 +2,29 @@ import type { CardConfig, LensConfig, LocationConfig, RangeKey } from './types';
 
 const RANGES: RangeKey[] = ['1h', '6h', '24h', '7d'];
 
+const SAFE_COLOR = /^(#[0-9a-f]{3,8}|(rgb|rgba|hsl|hsla)\([\d\s.,%/+-]+\)|var\(--[\w-]+\)|[a-z]+)$/i;
+
+function color(v: unknown, where: string): string | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'string' || !SAFE_COLOR.test(v.trim())) fail(`${where} is not a valid color`);
+  return (v as string).trim();
+}
+
+/** http(s) URL or same-origin absolute path; anything else (javascript:, data:, quotes) is rejected. */
+function safeUrl(v: unknown, where: string, allowPath: boolean): string | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'string' || /["'()\s\\]/.test(v)) fail(`${where} is not a valid URL`);
+  const s = v as string;
+  if (allowPath && s.startsWith('/') && !s.startsWith('//')) return s;
+  try {
+    const u = new URL(s);
+    if (u.protocol === 'http:' || u.protocol === 'https:') return s;
+  } catch {
+    /* fall through */
+  }
+  fail(`${where} must be an http(s) URL${allowPath ? ' or a /local/... path' : ''}`);
+}
+
 function fail(msg: string): never {
   throw new Error(`frigate-timeline-card: ${msg}`);
 }
@@ -56,20 +79,37 @@ export function normalizeConfig(raw: unknown): CardConfig {
   const range = c.default_range as RangeKey | undefined;
   if (range !== undefined && !RANGES.includes(range)) fail(`default_range must be one of ${RANGES.join(', ')}`);
 
+  const instance = c.frigate_instance_id ?? 'frigate';
+  if (typeof instance !== 'string' || !/^[\w.-]+$/.test(instance)) fail('frigate_instance_id may contain only letters, digits, _ . -');
+  const colorsIn = (c.colors ?? {}) as Record<string, unknown>;
+  const faces = Array.isArray(c.faces)
+    ? (c.faces as unknown[]).map((f, i) => {
+        if (typeof f === 'string') return { name: f };
+        const o = f as Record<string, unknown>;
+        if (!o || typeof o.name !== 'string') fail(`faces[${i}].name is required`);
+        return {
+          name: o.name as string,
+          color: color(o.color, `faces[${i}].color`),
+          image: safeUrl(o.image, `faces[${i}].image`, true),
+        };
+      })
+    : undefined;
+
   return {
     type: String(c.type),
-    frigate_instance_id: typeof c.frigate_instance_id === 'string' ? c.frigate_instance_id : 'frigate',
-    frigate_url: typeof c.frigate_url === 'string' ? c.frigate_url.replace(/\/$/, '') : undefined,
+    frigate_instance_id: instance,
+    frigate_url: safeUrl(c.frigate_url, 'frigate_url', false)?.replace(/\/$/, ''),
     default_range: range ?? '6h',
     cameras,
     security,
-    faces: Array.isArray(c.faces)
-      ? (c.faces as unknown[]).map((f) =>
-          typeof f === 'string' ? { name: f } : (f as { name: string; color?: string; image?: string }),
-        )
-      : undefined,
+    faces,
     motion: c.motion !== false,
     mobile_breakpoint: typeof c.mobile_breakpoint === 'number' ? c.mobile_breakpoint : 720,
-    colors: (c.colors as CardConfig['colors']) ?? {},
+    colors: {
+      alert: color(colorsIn.alert, 'colors.alert'),
+      detection: color(colorsIn.detection, 'colors.detection'),
+      security: color(colorsIn.security, 'colors.security'),
+      tamper: color(colorsIn.tamper, 'colors.tamper'),
+    },
   };
 }
