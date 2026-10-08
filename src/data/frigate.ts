@@ -59,6 +59,9 @@ export function isFrigateProxyPath(instanceId: string, path: string): boolean {
   return path.startsWith(`/api/frigate/${seg(instanceId)}/`) && !/(^|\/)\.\.?(\/|$)/.test(path);
 }
 
+/** One path point: normalized [x, y] of the object's bottom-centre, and its frame time. */
+export type PathPoint = [[number, number], number];
+
 export interface FrigateEvent {
   id: string;
   camera: string;
@@ -66,7 +69,18 @@ export interface FrigateEvent {
   sub_label: string | null;
   start_time: number;
   end_time: number | null;
-  data?: { sub_label_score?: number | null; score?: number; top_score?: number };
+  has_snapshot?: boolean;
+  plus_id?: string | null;
+  false_positive?: boolean | null;
+  top_score?: number | null;
+  data?: {
+    sub_label_score?: number | null;
+    score?: number;
+    top_score?: number;
+    /** normalized [x, y, w, h] of the best box */
+    box?: [number, number, number, number];
+    path_data?: PathPoint[];
+  };
 }
 
 export interface RecordingSegment {
@@ -178,6 +192,12 @@ export class FrigateApi {
    * (and from MQTT for live items), so it is treated as untrusted: only a plain
    * relative file path under clips/ is accepted, each segment URL-encoded.
    */
+  /** Event snapshot with Frigate's bounding box drawn on it. */
+  snapshotPath(eventId: string): string | null {
+    if (!/^[\w.-]+$/.test(eventId)) return null;
+    return `/api/frigate/${seg(this.instanceId)}/snapshot/${seg(eventId)}?bbox=1&height=360`;
+  }
+
   reviewThumbPath(review: Review): string | null {
     const marker = '/clips/';
     const idx = review.thumbPath.indexOf(marker);

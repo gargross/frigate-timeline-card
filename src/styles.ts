@@ -775,6 +775,54 @@ export const cardStyles = css`
     border: 0;
     padding: 0;
   }
+  .objects {
+    border-top: 1px solid var(--divider-color);
+    padding-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .obj {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    font-size: 13px;
+  }
+  .obj ftc-auth-img,
+  .obj .ph {
+    width: 96px;
+    aspect-ratio: 16 / 9;
+    flex: none;
+    border-radius: 6px;
+    background: var(--ftc-media-bg);
+  }
+  .obj .grow {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .obj .t1 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+    font-size: 14px;
+    text-transform: capitalize;
+  }
+  .obj .muted {
+    font-size: 12px;
+  }
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .chip ha-icon {
+    --mdc-icon-size: 16px;
+  }
   .filter-banner {
     display: flex;
     align-items: center;

@@ -89,7 +89,20 @@
       switch (msg.type) {
         case 'frigate/reviews/get': return JSON.stringify(reviews.filter((r) => msg.cameras.includes(r.camera)));
         case 'frigate/reviews/viewed': return { success: true };
-        case 'frigate/events/get': return JSON.stringify([{ id: 'ev-r7', camera: 'deck', label: 'person', sub_label: 'Alex', start_time: ago(60), end_time: ago(60) + 14, data: { sub_label_score: 0.93 } }, { id: 'ev-r10', camera: 'drive_ptz', label: 'person', sub_label: 'Sam', start_time: ago(17), end_time: null, data: { sub_label_score: 0.91 } }]);
+        case 'frigate/events/get': {
+          // One tracked object per review in range, with a synthetic path across the frame.
+          const out = reviews
+            .filter((r) => msg.cameras.includes(r.camera) && r.start_time <= msg.before && (r.end_time ?? Infinity) >= msg.after)
+            .map((r) => {
+              const t0 = r.start_time, dur = (r.end_time ?? Date.now() / 1000) - t0;
+              const path = Array.from({ length: 12 }, (_, i) => [[0.15 + i * 0.06, 0.8 - Math.sin(i / 3) * 0.25], t0 + (dur * i) / 11]);
+              return { id: r.data.detections[0], camera: r.camera, label: r.data.objects[0].replace('-verified', ''),
+                sub_label: r.data.sub_labels[0] ?? null, start_time: t0, end_time: r.end_time, has_snapshot: true,
+                plus_id: r.id === 'r4' ? 'abc' : null, top_score: 0.87,
+                data: { top_score: 0.87, sub_label_score: r.data.sub_labels.length ? 0.92 : null, box: [0.4, 0.4, 0.1, 0.2], path_data: path } };
+            });
+          return JSON.stringify(out);
+        }
         case 'frigate/recordings/get': {
           if (msg.camera.endsWith('_tele')) return JSON.stringify([]); // detect-only, like the real setup
           const out = [];

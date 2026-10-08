@@ -1,6 +1,6 @@
 {
   "name": "frigate-timeline-card",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Cross-camera Frigate review timeline with Home Assistant security events and face recognition",
   "private": true,
   "type": "module",

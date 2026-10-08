@@ -1,7 +1,7 @@
 import { LitElement, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { styleMap } from 'lit/directives/style-map.js';
 import { normalizeConfig } from './config';
-import { FrigateApi, type RecordingSegment } from './data/frigate';
+import { FrigateApi, type FrigateEvent, type RecordingSegment } from './data/frigate';
 import { SecurityHistory } from './data/security';
 import { cardStyles } from './styles';
 import type { CardConfig, HomeAssistant, LensRef, RangeKey, Review, SecurityMark, Severity } from './types';
@@ -19,9 +19,9 @@ import {
 } from './util';
 import './components/auth-img';
 import './components/player';
-import type { FtcPlayer } from './components/player';
+import type { FtcPlayer, OverlayPath } from './components/player';
 
-const VERSION = '0.2.4';
+const VERSION = '0.2.5';
 const RELATED_WINDOW = 300; // seconds either side of a review for "security events nearby"
 const MOMENT_WINDOW = 90; // seconds either side for "same moment, other cameras"
 const MOTION_MAX_SPAN = 6 * 3600;
@@ -31,6 +31,17 @@ const SYNC_MAX_FOLLOWERS = 8;
 const SYNC_DRIFT = 0.5; // seconds a follower may drift before it is re-seeked
 const SYNC_KEY = 'frigate-timeline-card:sync';
 const UNDO_MS = 10_000;
+
+const LABEL_COLORS: Record<string, string> = {
+  person: '#ffb74d',
+  car: '#4fc3f7',
+  dog: '#aed581',
+  cat: '#f06292',
+  bird: '#fff176',
+};
+function labelColor(label: string): string {
+  return LABEL_COLORS[label] ?? '#ce93d8';
+}
 
 /** What the player is showing: a review, or an arbitrary moment on one camera. */
 type Playback =
@@ -67,7 +78,8 @@ export class FrigateTimelineCard extends LitElement {
     _narrow: { state: true },
     _error: { state: true },
     _motion: { state: true },
-    _scores: { state: true },
+    _objects: { state: true },
+    _showPath: { state: true },
     _secVersion: { state: true },
     _tick: { state: true },
     _sync: { state: true },
@@ -91,7 +103,9 @@ export class FrigateTimelineCard extends LitElement {
   declare _narrow: boolean;
   declare _error: string | null;
   declare _motion: Map<string, RecordingSegment[]>;
-  declare _scores: Map<string, number | null>;
+  /** review id → its tracked objects (Frigate events), null while unavailable. */
+  declare _objects: Map<string, FrigateEvent[] | null>;
+  declare _showPath: boolean;
   declare _secVersion: number;
   declare _tick: number;
   declare _sync: boolean;
@@ -134,7 +148,8 @@ export class FrigateTimelineCard extends LitElement {
     this._narrow = false;
     this._error = null;
     this._motion = new Map();
-    this._scores = new Map();
+    this._objects = new Map();
+    this._showPath = true;
     this._secVersion = 0;
     this._tick = 0;
     this._undo = null;
@@ -307,7 +322,7 @@ export class FrigateTimelineCard extends LitElement {
       void this.ensureLoaded();
     }
     if (changed.has('_selId') || changed.has('_reviews')) this.autoSelect();
-    if (changed.has('_selId')) void this.loadScore();
+    if (changed.has('_selId')) void this.loadObjects();
     if (this._sync && !this._narrow && this._playback) this.startSyncLoop();
     else this.stopSyncLoop();
   }
@@ -434,19 +449,41 @@ export class FrigateTimelineCard extends LitElement {
     this._motion = next;
   }
 
-  private async loadScore(): Promise<void> {
+  /** Tracked objects (Frigate events) in the selected review: path, box, face score, Frigate+ state. */
+  private async loadObjects(): Promise<void> {
     const review = this.selected;
-    if (!review || !this.api || this._scores.has(review.id)) return;
-    if (!review.subLabels.length) return;
+    if (!review || !this.api) return;
+    const cached = this._objects.get(review.id);
+    if (cached && review.end !== null) return;
     try {
       const events = await this.api.getEvents(review.camera, review.start - 30, (review.end ?? nowSec()) + 30);
       const ids = new Set(review.detections);
-      const match = events.find((e) => ids.has(e.id) && e.sub_label);
-      const score = match?.data?.sub_label_score ?? null;
-      this._scores = new Map(this._scores).set(review.id, score);
+      const mine = events.filter((e) => ids.has(e.id)).sort((a, b) => a.start_time - b.start_time);
+      this._objects = new Map(this._objects).set(review.id, mine);
     } catch {
-      this._scores = new Map(this._scores).set(review.id, null);
+      if (!cached) this._objects = new Map(this._objects).set(review.id, null);
     }
+  }
+
+  /** Paths for the overlay, only when the video shown is the camera that detected them. */
+  private overlayPaths(camera: string): OverlayPath[] | null {
+    const r = this.selected;
+    if (!r || !this._showPath || r.camera !== camera) return null;
+    const objs = this._objects.get(r.id);
+    if (!objs?.length) return null;
+    return objs.map((e) => ({
+      label: e.sub_label ? `${e.sub_label}` : `${e.label} ${Math.round(((e.data?.top_score ?? e.top_score ?? 0) as number) * 100)}%`,
+      color: e.sub_label ? faceColor(e.sub_label, this._config) : labelColor(e.label),
+      points: (e.data?.path_data ?? [])
+        .filter((p) => Array.isArray(p) && Array.isArray(p[0]))
+        .map(([[x, y], t]) => ({ x, y, t })),
+      box: e.data?.box,
+    }));
+  }
+
+  private faceScore(review: Review): number | null {
+    const objs = this._objects.get(review.id) ?? [];
+    return objs.find((e) => e.sub_label)?.data?.sub_label_score ?? null;
   }
 
   // ---------------------------------------------------------------- derived state
@@ -1208,6 +1245,7 @@ export class FrigateTimelineCard extends LitElement {
         .start=${start}
         .end=${end}
         .position=${this._resumeAt}
+        .paths=${this.overlayPaths(camera)}
         @ftc-time=${(e: CustomEvent<{ wall: number }>) => this.onPlayerTime(e)}
       ></ftc-player>
       <div class="controls">
@@ -1240,6 +1278,19 @@ export class FrigateTimelineCard extends LitElement {
             </button>`,
           )}
         </div>
+        ${sel
+          ? html`<button
+              class="chip"
+              aria-pressed=${String(this._showPath)}
+              ?disabled=${sel.camera !== camera}
+              title=${sel.camera !== camera
+                ? 'The path is in the coordinates of the lens that detected it; switch to that lens to see it'
+                : 'Show where Frigate tracked each object'}
+              @click=${() => (this._showPath = !this._showPath)}
+            >
+              <ha-icon icon="mdi:vector-polyline"></ha-icon>Path
+            </button>`
+          : nothing}
         <span class="spacer"></span>
         <button class="icon-btn" @click=${() => void this.downloadClip(camera, start, end)}>
           <ha-icon icon="mdi:download"></ha-icon>Clip
@@ -1399,7 +1450,7 @@ export class FrigateTimelineCard extends LitElement {
       </div>`;
     }
     const face = faceOf(r, this.knownFaces);
-    const score = this._scores.get(r.id);
+    const score = this.faceScore(r);
     const related = marks
       .filter((m) => m.start >= r.start - RELATED_WINDOW && m.start <= (r.end ?? nowSec()) + RELATED_WINDOW)
       .slice(0, 8);
@@ -1443,6 +1494,7 @@ export class FrigateTimelineCard extends LitElement {
           ${r.reviewed ? 'Mark unreviewed' : 'Mark reviewed & next'}
         </button>
       </div>
+      ${this.renderObjects(r)}
       ${security.length
         ? html`<div style="border-top:1px solid var(--divider-color);padding-top:10px;display:flex;flex-direction:column;gap:6px">
             <h3>Security events ±${RELATED_WINDOW / 60} min</h3>
@@ -1458,6 +1510,45 @@ export class FrigateTimelineCard extends LitElement {
               : html`<span class="muted" style="font-size:13px">No door, lock or garage activity around this event.</span>`}
           </div>`
         : nothing}
+    </div>`;
+  }
+
+  private renderObjects(r: Review): TemplateResult | typeof nothing {
+    const objs = this._objects.get(r.id);
+    if (objs === undefined) return nothing;
+    const fu = this._config.frigate_url;
+    return html`<div class="objects">
+      <h3>Tracked objects${objs ? ` · ${objs.length}` : ''}</h3>
+      ${objs === null
+        ? html`<span class="muted" style="font-size:13px">Couldn't load object details from Frigate.</span>`
+        : !objs.length
+          ? html`<span class="muted" style="font-size:13px">No tracked objects recorded for this event.</span>`
+          : objs.map((e) => {
+              const snap = e.has_snapshot ? this.api?.snapshotPath(e.id) : null;
+              const score = e.data?.top_score ?? e.top_score;
+              const color = e.sub_label ? faceColor(e.sub_label, this._config) : labelColor(e.label);
+              return html`<div class="obj">
+                ${snap
+                  ? html`<ftc-auth-img .hass=${this.hass} .path=${snap} alt="Snapshot of ${e.label}"></ftc-auth-img>`
+                  : html`<span class="ph"></span>`}
+                <div class="grow">
+                  <span class="t1"><span class="swatch" style="background:${color}"></span>${e.sub_label ?? e.label}
+                    ${typeof score === 'number' ? html`<span class="muted">${Math.round(score * 100)}%</span>` : nothing}</span>
+                  <span class="muted">${e.sub_label ? `${e.label} · ` : ''}${this.fmt?.ts(e.start_time)}${e.data?.path_data?.length ? ` · ${e.data.path_data.length}-point path` : ''}</span>
+                  <span class="muted">${e.plus_id ? '✓ Submitted to Frigate+' : e.false_positive ? 'Marked false positive' : ''}</span>
+                </div>
+                ${fu
+                  ? html`<a
+                      class="icon-btn"
+                      href=${`${fu}/explore?event_id=${encodeURIComponent(e.id)}`}
+                      target="_blank"
+                      rel="noopener"
+                      title="Open this object in Frigate (Frigate+ submission is done there)"
+                      ><ha-icon icon="mdi:open-in-new"></ha-icon></a
+                    >`
+                  : nothing}
+              </div>`;
+            })}
     </div>`;
   }
 
