@@ -88,6 +88,11 @@ export class FtcPlayer extends LitElement {
 
   private hls: HlsType | null = null;
   private loadedKey = '';
+  /** Stall watchdog: see recoverStall(). */
+  private stallTimer?: number;
+  private stallLastT = -1;
+  private stallSince = 0;
+  private stallNudges = 0;
 
   constructor() {
     super();
@@ -241,8 +246,52 @@ export class FtcPlayer extends LitElement {
   }
 
   private teardown(): void {
+    if (this.stallTimer) window.clearInterval(this.stallTimer);
+    this.stallTimer = undefined;
     this.hls?.destroy();
     this.hls = null;
+  }
+
+  private buffersAt(v: HTMLVideoElement, t: number): boolean {
+    for (let i = 0; i < v.buffered.length; i++) if (v.buffered.start(i) <= t && t < v.buffered.end(i) - 0.2) return true;
+    return false;
+  }
+
+  /**
+   * iOS (ManagedMediaSource): the element reports playing with the whole window
+   * buffered (readyState 4) but currentTime never leaves the start position, and
+   * hls.js raises a non-fatal bufferStalledError. A user seek recovers it, so the
+   * watchdog does the same: a small forward seek inside the buffer, escalating.
+   */
+  private recoverStall(v: HTMLVideoElement, why: string): void {
+    const steps = [0.1, 1, 3];
+    if (this.stallNudges >= steps.length) return;
+    const to = v.currentTime + steps[this.stallNudges];
+    if (!this.buffersAt(v, to)) return;
+    this.stallNudges++;
+    this.dbg(`nudge#${this.stallNudges} (${why}) ${v.currentTime.toFixed(2)}→${to.toFixed(2)}`);
+    v.currentTime = to;
+    this.stallSince = performance.now();
+  }
+
+  private startStallWatchdog(v: HTMLVideoElement): void {
+    this.stallNudges = 0;
+    this.stallLastT = -1;
+    this.stallSince = performance.now();
+    if (this.stallTimer) window.clearInterval(this.stallTimer);
+    this.stallTimer = window.setInterval(() => {
+      if (v.paused || v.ended || v.seeking || v.readyState < 3) {
+        this.stallLastT = v.currentTime;
+        this.stallSince = performance.now();
+        return;
+      }
+      if (v.currentTime !== this.stallLastT) {
+        this.stallLastT = v.currentTime;
+        this.stallSince = performance.now();
+        return;
+      }
+      if (performance.now() - this.stallSince > 1500) this.recoverStall(v, 'watchdog');
+    }, 500);
   }
 
   protected updated(): void {
@@ -330,6 +379,7 @@ export class FtcPlayer extends LitElement {
         }
       }
       hls.on(Hls.Events.ERROR, (_e: unknown, data: { fatal: boolean; details: string }) => {
+        if (!data.fatal && data.details === 'bufferStalledError' && !video.paused) this.recoverStall(video, 'hls');
         if (data.fatal) {
           const missing = data.details === 'manifestLoadError';
           this._error = this.follower
@@ -342,6 +392,7 @@ export class FtcPlayer extends LitElement {
       });
       hls.loadSource(url);
       hls.attachMedia(video);
+      this.startStallWatchdog(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () =>
         void video.play().then(
           () => this.dbg('play() resolved'),
