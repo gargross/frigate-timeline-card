@@ -126,7 +126,7 @@ export class FtcPlayer extends LitElement {
         : 'no video',
       `buffered=[${b.join(', ')}]`,
     ];
-    this._dbg = [...head, '—', ...this.dbgLog.slice(-14)].join('\n');
+    this._dbg = [...head, '— newest first —', ...this.dbgLog.slice(-12).reverse()].join('\n');
   }
 
   private dbgHookVideo(video: HTMLVideoElement): void {
