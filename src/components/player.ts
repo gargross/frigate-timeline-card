@@ -28,11 +28,11 @@ export interface OverlayPath {
 const PAD = 10;
 
 /**
- * TEMPORARY (v0.2.6): on-screen playback diagnostics for the iPhone stall at 00:07.
+ * On-screen playback diagnostics (added v0.2.6 for the iPhone stall at 00:07; off since v0.2.9).
  * Shows player state and hls.js / <video> events. No URLs or tokens are shown.
  * Set to false (or revert this release) once the stall is diagnosed.
  */
-const DEBUG = true;
+const DEBUG = false;
 const DEBUG_HLS_EVENTS = [
   'MEDIA_ATTACHED', 'MANIFEST_PARSED', 'LEVEL_LOADED', 'FRAG_LOADING', 'FRAG_LOADED',
   'FRAG_PARSED', 'FRAG_BUFFERED', 'BUFFER_CREATED', 'BUFFER_APPENDED', 'BUFFER_EOS', 'ERROR',
