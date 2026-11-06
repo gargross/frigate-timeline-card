@@ -28,6 +28,21 @@ export interface OverlayPath {
 const PAD = 10;
 
 /**
+ * TEMPORARY (v0.2.6): on-screen playback diagnostics for the iPhone stall at 00:07.
+ * Shows player state and hls.js / <video> events. No URLs or tokens are shown.
+ * Set to false (or revert this release) once the stall is diagnosed.
+ */
+const DEBUG = true;
+const DEBUG_HLS_EVENTS = [
+  'MEDIA_ATTACHED', 'MANIFEST_PARSED', 'LEVEL_LOADED', 'FRAG_LOADING', 'FRAG_LOADED',
+  'FRAG_PARSED', 'FRAG_BUFFERED', 'BUFFER_CREATED', 'BUFFER_APPENDED', 'BUFFER_EOS', 'ERROR',
+] as const;
+const DEBUG_VIDEO_EVENTS = [
+  'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough', 'play', 'playing', 'pause',
+  'waiting', 'stalled', 'suspend', 'seeking', 'seeked', 'ended', 'error', 'emptied',
+];
+
+/**
  * Plays a Frigate recording window through the integration's VOD proxy.
  * hls.js (MSE / ManagedMediaSource) with a bearer token where available;
  * otherwise a signed MP4 clip URL for native <video>.
@@ -45,6 +60,7 @@ export class FtcPlayer extends LitElement {
     _error: { state: true },
     _rect: { state: true },
     _wall: { state: true },
+    _dbg: { state: true },
   };
 
   declare hass: HomeAssistant;
@@ -62,6 +78,13 @@ export class FtcPlayer extends LitElement {
   declare _rect: { left: number; top: number; width: number; height: number } | null;
   declare _wall: number | null;
   private resizeObs?: ResizeObserver;
+  declare _dbg: string;
+  private dbgLog: string[] = [];
+  private dbgMode = '';
+  private dbgSeekTo = 0;
+  private dbgT0 = 0;
+  private dbgTimer?: number;
+  private dbgVideoHooked = false;
 
   private hls: HlsType | null = null;
   private loadedKey = '';
@@ -75,6 +98,44 @@ export class FtcPlayer extends LitElement {
     this.paths = null;
     this._rect = null;
     this._wall = null;
+    this._dbg = '';
+  }
+
+  private dbgOn(): boolean {
+    return DEBUG && !this.follower;
+  }
+
+  private dbg(msg: string): void {
+    if (!this.dbgOn()) return;
+    const t = ((performance.now() - this.dbgT0) / 1000).toFixed(2);
+    this.dbgLog.push(`${t}s ${msg}`);
+    if (this.dbgLog.length > 40) this.dbgLog.shift();
+    this.dbgRefresh();
+  }
+
+  private dbgRefresh(): void {
+    if (!this.dbgOn()) return;
+    const v = this.video;
+    const w = window as unknown as Record<string, unknown>;
+    const b: string[] = [];
+    if (v) for (let i = 0; i < v.buffered.length; i++) b.push(`${v.buffered.start(i).toFixed(2)}–${v.buffered.end(i).toFixed(2)}`);
+    const head = [
+      `mode=${this.dbgMode || '?'} MSE=${!!w.MediaSource} MMS=${!!w.ManagedMediaSource} seekTo=${this.dbgSeekTo}`,
+      v
+        ? `t=${v.currentTime.toFixed(2)} paused=${v.paused} ready=${v.readyState} net=${v.networkState} err=${v.error?.code ?? '-'} rate=${v.playbackRate}`
+        : 'no video',
+      `buffered=[${b.join(', ')}]`,
+    ];
+    this._dbg = [...head, '—', ...this.dbgLog.slice(-14)].join('\n');
+  }
+
+  private dbgHookVideo(video: HTMLVideoElement): void {
+    if (!this.dbgOn() || this.dbgVideoHooked) return;
+    this.dbgVideoHooked = true;
+    for (const ev of DEBUG_VIDEO_EVENTS) {
+      video.addEventListener(ev, () => this.dbg(`v:${ev} t=${video.currentTime.toFixed(2)} rs=${video.readyState}`));
+    }
+    this.dbgTimer ??= window.setInterval(() => this.dbgRefresh(), 500);
   }
 
   private measure(): void {
@@ -129,6 +190,21 @@ export class FtcPlayer extends LitElement {
       color: #000;
       white-space: nowrap;
     }
+    .dbg {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      max-height: 70%;
+      overflow: auto;
+      margin: 0;
+      padding: 4px 6px;
+      font: 10px/1.25 ui-monospace, Menlo, monospace;
+      color: #0f0;
+      background: rgba(0, 0, 0, 0.75);
+      white-space: pre-wrap;
+      pointer-events: none;
+    }
     .error {
       position: absolute;
       inset: 0;
@@ -151,6 +227,8 @@ export class FtcPlayer extends LitElement {
     super.disconnectedCallback();
     this.resizeObs?.disconnect();
     this.resizeObs = undefined;
+    if (this.dbgTimer) window.clearInterval(this.dbgTimer);
+    this.dbgTimer = undefined;
     this.teardown();
     this.loadedKey = '';
   }
@@ -193,10 +271,17 @@ export class FtcPlayer extends LitElement {
     if (!video) return;
     const { from, to } = this.window();
     const seekTo = this.position ?? Math.max(0, PAD - 3);
+    this.dbgLog = [];
+    this.dbgT0 = performance.now();
+    this.dbgSeekTo = seekTo;
+    this.dbgHookVideo(video);
+    this.dbg(`load window=${Math.round(to - from)}s`);
 
     const Hls = await loadHls();
     if (this.loadedKey !== key) return;
+    this.dbg(`hls.js ${Hls ? `v${Hls.version} supported=${Hls.isSupported()}` : 'failed to load'}`);
     if (Hls?.isSupported()) {
+      this.dbgMode = 'hls.js';
       // Released Frigate integrations (≤ v5.15.6) reject Bearer-authenticated VOD
       // *segments*; they only accept the manifest's signature (authSig) repeated on
       // each segment URL. Sign the manifest once and append its authSig to every
@@ -231,6 +316,19 @@ export class FtcPlayer extends LitElement {
         startPosition: seekTo,
       });
       this.hls = hls;
+      if (this.dbgOn()) {
+        const ev = Hls.Events as unknown as Record<string, string>;
+        for (const name of DEBUG_HLS_EVENTS) {
+          hls.on(ev[name] as never, ((_e: unknown, d: Record<string, any>) => {
+            let extra = '';
+            if (name === 'ERROR') extra = ` ${d.type}/${d.details} fatal=${d.fatal}`;
+            else if (d?.frag) extra = ` sn=${d.frag.sn} start=${Number(d.frag.start).toFixed(2)} dur=${Number(d.frag.duration).toFixed(2)}`;
+            else if (name === 'LEVEL_LOADED') extra = ` frags=${d.details?.fragments?.length} total=${Number(d.details?.totalduration).toFixed(1)}s`;
+            else if (name === 'BUFFER_APPENDED') extra = ` ${d.type}`;
+            this.dbg(`hls:${name}${extra}`);
+          }) as never);
+        }
+      }
       hls.on(Hls.Events.ERROR, (_e: unknown, data: { fatal: boolean; details: string }) => {
         if (data.fatal) {
           const missing = data.details === 'manifestLoadError';
@@ -244,11 +342,17 @@ export class FtcPlayer extends LitElement {
       });
       hls.loadSource(url);
       hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => void video.play().catch(() => undefined));
+      hls.on(Hls.Events.MANIFEST_PARSED, () =>
+        void video.play().then(
+          () => this.dbg('play() resolved'),
+          (err: unknown) => this.dbg(`play() rejected: ${(err as Error)?.name ?? err}`),
+        ),
+      );
       return;
     }
 
     // Native fallback: signed MP4 clip (served whole; fine for event-length windows).
+    this.dbgMode = 'native-mp4';
     try {
       const src = await this.api.signPath(this.api.clipPath(this.camera, from, to), 3600);
       if (this.loadedKey !== key) return;
@@ -257,7 +361,10 @@ export class FtcPlayer extends LitElement {
         'loadedmetadata',
         () => {
           video.currentTime = seekTo;
-          void video.play().catch(() => undefined);
+          void video.play().then(
+            () => this.dbg('play() resolved'),
+            (err: unknown) => this.dbg(`play() rejected: ${(err as Error)?.name ?? err}`),
+          );
         },
         { once: true },
       );
@@ -334,6 +441,7 @@ export class FtcPlayer extends LitElement {
         @timeupdate=${(e: Event) => this.onTimeUpdate(e)}
       ></video>
       ${this.renderOverlay()}
+      ${this.dbgOn() && this._dbg ? html`<pre class="dbg">${this._dbg}</pre>` : nothing}
       ${this._error ? html`<div class="error">${this._error}</div>` : null}`;
   }
 }
